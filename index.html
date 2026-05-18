@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tesla Battery Temp</title>
+  <style>
+    :root {
+      --bg:      #0d0d0d;
+      --card:    #1a1a1a;
+      --accent:  #e31937;
+      --text:    #f5f5f5;
+      --muted:   #888888;
+      --success: #3ddc84;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
+      min-height: 100vh; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; padding: 24px;
+    }
+
+    /* SETUP */
+    #setup-screen { width: 100%; max-width: 520px; }
+    h1 { font-size: 2rem; font-weight: 700; text-align: center; margin-bottom: 6px; }
+    .subtitle { color: var(--muted); text-align: center; font-size: 1rem; margin-bottom: 28px; }
+    .card { background: var(--card); border-radius: 16px; padding: 24px; margin-bottom: 14px; }
+    label { display: block; font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+    select {
+      width: 100%; background: #252525; border: 1px solid #333; border-radius: 10px;
+      color: var(--text); font-size: 1rem; padding: 13px 14px; margin-bottom: 20px;
+      outline: none; appearance: none;
+    }
+    .btn {
+      display: block; width: 100%; border: none; border-radius: 10px;
+      cursor: pointer; font-size: 1.05rem; font-weight: 600;
+      padding: 15px; transition: opacity 0.2s; text-align: center;
+    }
+    .btn:hover    { opacity: 0.85; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary   { background: var(--accent); color: #fff; }
+    .btn-secondary { background: transparent; border: 1px solid #383838; color: var(--muted); font-size: 0.9rem; padding: 11px; margin-top: 8px; }
+    .btn-refresh   { background: #252525; color: var(--text); font-size: 1rem; margin-top: 20px; }
+    .hint { font-size: 0.83rem; color: var(--muted); line-height: 1.65; }
+
+    /* MAIN */
+    #main-screen { display: none; text-align: center; width: 100%; max-width: 480px; }
+    .vehicle-name { font-size: 1.1rem; color: var(--muted); margin-bottom: 10px; }
+    .temp-card { background: var(--card); border-radius: 24px; padding: 52px 32px 40px; margin-bottom: 16px; }
+    .temp-label { font-size: 0.82rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 20px; }
+    #temp-value { font-size: 5.5rem; font-weight: 800; line-height: 1; }
+    .temp-unit  { font-size: 2.2rem; font-weight: 400; color: var(--muted); }
+    #temp-c     { margin-top: 12px; font-size: 1.1rem; color: var(--muted); min-height: 1.4em; }
+    .status-row { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); font-size: 0.88rem; margin-top: 14px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); flex-shrink: 0; animation: blink 2s infinite; }
+    @keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0.25;} }
+    #countdown { font-size: 0.78rem; color: #555; margin-top: 6px; min-height: 1.2em; }
+    .error { background: #1e0b0b; border: 1px solid #6b1a1a; border-radius: 10px; color: #ff9090; padding: 13px 15px; font-size: 0.9rem; text-align: left; margin-top: 14px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+
+<!-- SETUP -->
+<div id="setup-screen">
+  <h1>🔋 Battery Temp</h1>
+  <p class="subtitle">Sign in once — token saved in browser</p>
+  <div class="card">
+    <label>Tesla Fleet API Region</label>
+    <select id="region">
+      <option value="https://fleet-api.prd.na.vn.cloud.tesla.com">North America</option>
+      <option value="https://fleet-api.prd.eu.vn.cloud.tesla.com">Europe / Middle East / Africa</option>
+      <option value="https://fleet-api.prd.cn.vn.cloud.tesla.com">Asia-Pacific</option>
+    </select>
+    <button class="btn btn-primary" id="login-btn" onclick="loginWithTesla()">Login with Tesla</button>
+    <div id="setup-error" class="error" style="display:none"></div>
+  </div>
+  <div class="card hint">
+    Tap the button to sign in with your Tesla account. Your token is saved
+    locally in this browser — you won't need to log in again on this device.
+  </div>
+</div>
+
+<!-- MAIN -->
+<div id="main-screen">
+  <div class="vehicle-name" id="vehicle-name">Loading vehicle…</div>
+  <div class="temp-card">
+    <div class="temp-label">Battery Temperature</div>
+    <div id="temp-value">--<span class="temp-unit">°F</span></div>
+    <div id="temp-c"></div>
+  </div>
+  <div class="status-row">
+    <div class="dot"></div>
+    <span id="last-updated">Fetching…</span>
+  </div>
+  <div id="countdown"></div>
+  <div id="main-error" class="error" style="display:none"></div>
+  <button class="btn btn-refresh" onclick="fetchData()">↻ Refresh Now</button>
+  <button class="btn btn-secondary" onclick="logout()">Sign Out / Re-login</button>
+</div>
+
+<script>
+  var TESLA_CLIENT_ID = "39e303b4-8b1d-4db8-90b6-c1bc151ec3b0";
+  var TESLA_REDIRECT  = "https://tesla-model-sdb.netlify.app/callback";
+  var TESLA_AUTH_URL  = "https://auth.tesla.com/oauth2/v3/authorize";
+  var TESLA_TOKEN_URL = "https://auth.tesla.com/oauth2/v3/token";
+  var TESLA_SCOPE     = "vehicle_device_data openid offline_access";
+  var REFRESH_SEC     = 60;
+
+  var apiBase      = "";
+  var accessToken  = "";
+  var vehicleId    = "";
+  var countdownSec = REFRESH_SEC;
+  var ticker       = null;
+
+  // ── PKCE ─────────────────────────────────────────────────────────────────────
+  function b64url(buf) {
+    return btoa(String.fromCharCode.apply(null, new Uint8Array(buf)))
+      .replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"");
+  }
+  function randomVerifier() {
+    var arr = new Uint8Array(32);
+    crypto.getRandomValues(arr);
+    return b64url(arr.buffer);
+  }
+  function makeChallenge(verifier) {
+    return crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))
+      .then(function(buf){ return b64url(buf); });
+  }
+
+  // ── LOGIN ─────────────────────────────────────────────────────────────────────
+  function loginWithTesla() {
+    var btn    = document.getElementById("login-btn");
+    var region = document.getElementById("region").value;
+    btn.disabled = true;
+    btn.textContent = "Redirecting…";
+
+    var verifier = randomVerifier();
+    var state    = randomVerifier().slice(0, 16);
+
+    makeChallenge(verifier).then(function(challenge) {
+      sessionStorage.setItem("pkce_verifier", verifier);
+      sessionStorage.setItem("oauth_state",   state);
+      sessionStorage.setItem("tesla_region",  region);
+
+      var params = new URLSearchParams({
+        client_id:             TESLA_CLIENT_ID,
+        redirect_uri:          TESLA_REDIRECT,
+        response_type:         "code",
+        scope:                 TESLA_SCOPE,
+        state:                 state,
+        code_challenge:        challenge,
+        code_challenge_method: "S256",
+      });
+      window.location.href = TESLA_AUTH_URL + "?" + params.toString();
+    });
+  }
+
+  // ── OAUTH CALLBACK ────────────────────────────────────────────────────────────
+  function handleCallback(code, state) {
+    var savedState = sessionStorage.getItem("oauth_state");
+    var verifier   = sessionStorage.getItem("pkce_verifier");
+    var region     = sessionStorage.getItem("tesla_region")
+                  || "https://fleet-api.prd.na.vn.cloud.tesla.com";
+
+    sessionStorage.removeItem("oauth_state");
+    sessionStorage.removeItem("pkce_verifier");
+    sessionStorage.removeItem("tesla_region");
+    window.history.replaceState({}, "", "/");
+
+    if (state !== savedState) {
+      showSetup("Security check failed. Please try again.");
+      return;
+    }
+
+    fetch(TESLA_TOKEN_URL, {
+      method:  "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type:    "authorization_code",
+        client_id:     TESLA_CLIENT_ID,
+        redirect_uri:  TESLA_REDIRECT,
+        code:          code,
+        code_verifier: verifier,
+      }).toString(),
+    })
+    .then(function(res) {
+      if (!res.ok) return res.text().then(function(t){ throw new Error(res.status + ": " + t); });
+      return res.json();
+    })
+    .then(function(data) {
+      if (!data.access_token) throw new Error("No access_token in response");
+      // Save to localStorage — no Firebase needed
+      localStorage.setItem("tesla_token",  data.access_token);
+      localStorage.setItem("tesla_region", region);
+      if (data.refresh_token) localStorage.setItem("tesla_refresh", data.refresh_token);
+
+      accessToken = data.access_token;
+      apiBase     = region;
+      showMain();
+      loadVehicle();
+      startTicker();
+    })
+    .catch(function(err) {
+      showSetup("Login failed: " + err.message);
+    });
+  }
+
+  // ── STARTUP ───────────────────────────────────────────────────────────────────
+  function init() {
+    var params = new URLSearchParams(window.location.search);
+    var code   = params.get("code");
+    var state  = params.get("state");
+    var oerr   = params.get("error");
+
+    if (oerr)  { showSetup("Tesla login was cancelled."); return; }
+    if (code)  { handleCallback(code, state); return; }
+
+    // Check localStorage for a saved token
+    var savedToken  = localStorage.getItem("tesla_token");
+    var savedRegion = localStorage.getItem("tesla_region");
+
+    if (savedToken && savedRegion) {
+      accessToken = savedToken;
+      apiBase     = savedRegion;
+      showMain();
+      loadVehicle();
+      startTicker();
+    } else {
+      showSetup();
+    }
+  }
+
+  // ── LOAD VEHICLE ──────────────────────────────────────────────────────────────
+  function loadVehicle() {
+    var errEl = document.getElementById("main-error");
+    errEl.style.display = "none";
+
+    teslaFetch("/api/1/vehicles")
+    .then(function(res) {
+      var list = (res && res.response) ? res.response : [];
+      if (!list.length) { showErr(errEl, "No vehicles found on this account."); return; }
+      var car  = list[0];
+      vehicleId = car.id_s || String(car.id);
+      document.getElementById("vehicle-name").textContent =
+        car.display_name || car.vin || "My Tesla";
+      fetchData();
+    })
+    .catch(function(err) { handleApiError(errEl, err); });
+  }
+
+  // ── FETCH BATTERY TEMP ────────────────────────────────────────────────────────
+  function fetchData() {
+    var errEl = document.getElementById("main-error");
+    errEl.style.display = "none";
+
+    teslaFetch("/api/1/vehicles/" + vehicleId + "/vehicle_data?endpoints=charge_state")
+    .then(function(res) {
+      var cs    = (res.response && res.response.charge_state) ? res.response.charge_state
+               : res.response || {};
+      var tempC = cs.battery_temp != null    ? cs.battery_temp
+               : cs.battery_temperature != null ? cs.battery_temperature : null;
+
+      var valueEl = document.getElementById("temp-value");
+      var cEl     = document.getElementById("temp-c");
+
+      if (tempC == null) {
+        valueEl.innerHTML = '--<span class="temp-unit">°F</span>';
+        cEl.textContent   = "";
+        showErr(errEl, "Battery temperature isn't available right now. The car may be asleep — wake it in the Tesla app, then tap Refresh.");
+      } else {
+        var f = ((tempC * 9) / 5 + 32).toFixed(1);
+        var c = Number(tempC).toFixed(1);
+        valueEl.innerHTML = f + '<span class="temp-unit">°F</span>';
+        cEl.textContent   = c + " °C";
+      }
+      document.getElementById("last-updated").textContent =
+        "Updated " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"});
+      resetTicker();
+    })
+    .catch(function(err) { handleApiError(document.getElementById("main-error"), err); });
+  }
+
+  // ── AUTO-REFRESH ──────────────────────────────────────────────────────────────
+  function startTicker() { resetTicker(); }
+  function resetTicker() {
+    clearInterval(ticker);
+    countdownSec = REFRESH_SEC;
+    tick();
+    ticker = setInterval(tick, 1000);
+  }
+  function tick() {
+    var el = document.getElementById("countdown");
+    if (countdownSec > 0) {
+      el.textContent = "Refreshes in " + countdownSec + "s";
+      countdownSec--;
+    } else {
+      el.textContent = "Refreshing…";
+      fetchData();
+    }
+  }
+
+  // ── LOGOUT ────────────────────────────────────────────────────────────────────
+  function logout() {
+    clearInterval(ticker);
+    localStorage.removeItem("tesla_token");
+    localStorage.removeItem("tesla_region");
+    localStorage.removeItem("tesla_refresh");
+    accessToken = "";
+    vehicleId   = "";
+    showSetup();
+  }
+
+  // ── HELPERS ───────────────────────────────────────────────────────────────────
+  function teslaFetch(path) {
+    var proxyUrl = "/api/tesla?region=" +
+      encodeURIComponent(apiBase) + "&endpoint=" + encodeURIComponent(path);
+    return fetch(proxyUrl, {
+      headers: { "X-Tesla-Token": accessToken },
+    }).then(function(res) {
+      if (!res.ok) return res.text().then(function(t){ throw new Error(res.status + " " + t); });
+      return res.json();
+    });
+  }
+
+  function handleApiError(errEl, err) {
+    var msg = err.message || String(err);
+    if (msg.indexOf("401") !== -1) {
+      showErr(errEl, "Token expired — tap “Sign Out / Re-login” to sign in again.");
+    } else {
+      showErr(errEl, "Error: " + msg);
+    }
+  }
+
+  function showSetup(errMsg) {
+    document.getElementById("setup-screen").style.display = "block";
+    document.getElementById("main-screen").style.display  = "none";
+    var errEl = document.getElementById("setup-error");
+    if (errMsg) { showErr(errEl, errMsg); } else { errEl.style.display = "none"; }
+    var btn = document.getElementById("login-btn");
+    btn.disabled    = false;
+    btn.textContent = "Login with Tesla";
+  }
+  function showMain() {
+    document.getElementById("setup-screen").style.display = "none";
+    document.getElementById("main-screen").style.display  = "block";
+  }
+  function showErr(el, msg) {
+    el.textContent   = msg;
+    el.style.display = "block";
+  }
+
+  init();
+</script>
+</body>
+</html>
